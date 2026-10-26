@@ -1,0 +1,116 @@
+name: Build and release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    name: Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.44.4"
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - name: Build APK
+        run: >
+          flutter build apk --release
+          --dart-define=SUPABASE_URL="${{ vars.SUPABASE_URL }}"
+          --dart-define=SUPABASE_ANON_KEY="${{ vars.SUPABASE_ANON_KEY }}"
+      - run: cp build/app/outputs/flutter-apk/app-release.apk mercado-android.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: mercado-android.apk
+          if-no-files-found: error
+
+  linux:
+    name: Linux x64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.44.4"
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - name: Build Linux
+        run: >
+          flutter build linux --release
+          --dart-define=SUPABASE_URL="${{ vars.SUPABASE_URL }}"
+          --dart-define=SUPABASE_ANON_KEY="${{ vars.SUPABASE_ANON_KEY }}"
+      - name: Package
+        run: tar -czf mercado-linux-x64.tar.gz -C build/linux/x64/release/bundle .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: mercado-linux-x64.tar.gz
+          if-no-files-found: error
+
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.44.4"
+          channel: stable
+          cache: true
+      - run: flutter config --enable-windows-desktop
+      - run: flutter pub get
+      - name: Build Windows
+        shell: pwsh
+        run: >
+          flutter build windows --release
+          --dart-define=SUPABASE_URL="${{ vars.SUPABASE_URL }}"
+          --dart-define=SUPABASE_ANON_KEY="${{ vars.SUPABASE_ANON_KEY }}"
+      - name: Package
+        shell: pwsh
+        run: >
+          Compress-Archive
+          -Path build/windows/x64/runner/Release/*
+          -DestinationPath mercado-windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: mercado-windows-x64.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [android, linux, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
